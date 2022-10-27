@@ -257,10 +257,10 @@ class CLIPDenseBase(nn.Module):
 
 
 # def clip_load_untrained(version):
-#     assert version == 'ViT-B/16'
+#     assert version == 'openai/clip-vit-base-patch16'
 #     from clip.model import CLIP
 #     from clip.clip import _MODELS, _download
-#     model = torch.jit.load(_download(_MODELS['ViT-B/16'])).eval()
+#     model = torch.jit.load(_download(_MODELS['openai/clip-vit-base-patch16'])).eval()
 #     state_dict = model.state_dict()
 
 #     vision_width = state_dict["visual.conv1.weight"].shape[0]
@@ -281,7 +281,7 @@ class CLIPDenseBase(nn.Module):
 
 class CLIPDensePredT(CLIPDenseBase):
 
-    def __init__(self, version='ViT-B/32', extract_layers=(3, 6, 9), cond_layer=0, reduce_dim=128, n_heads=4, prompt='fixed', 
+    def __init__(self, version='openai/clip-vit-base-patch16', extract_layers=(3, 6, 9), cond_layer=0, reduce_dim=128, n_heads=4, prompt='fixed', 
                  extra_blocks=0, reduce_cond=None, fix_shift=False,
                  learn_trans_conv_only=False,  limit_to_clip_only=False, upsample=False, 
                  add_calibration=False, rev_activations=False, trans_conv=None, n_tokens=None, complex_trans_conv=False):
@@ -306,7 +306,7 @@ class CLIPDensePredT(CLIPDenseBase):
 
         self.version = version
         
-        self.token_shape = {'ViT-B/32': (7, 7), 'ViT-B/16': (14, 14)}[version]
+        self.token_shape = {'openai/clip-vit-base-patch32': (7, 7), 'openai/clip-vit-base-patch16': (14, 14)}[version]
 
         if fix_shift:
             # self.shift_vector = nn.Parameter(torch.load(join(dirname(basename(__file__)), 'clip_text_shift_vector.pth')), requires_grad=False)
@@ -316,7 +316,7 @@ class CLIPDensePredT(CLIPDenseBase):
             self.shift_vector = None
 
         if trans_conv is None:
-            trans_conv_ks = {'ViT-B/32': (32, 32), 'ViT-B/16': (16, 16)}[version]
+            trans_conv_ks = {'openai/clip-vit-base-patch32': (32, 32), 'openai/clip-vit-base-patch16': (16, 16)}[version]
         else:
             # explicitly define transposed conv kernel size
             trans_conv_ks = (trans_conv, trans_conv)
@@ -422,7 +422,7 @@ class CLIPDensePredT(CLIPDenseBase):
 
 class CLIPDensePredTMasked(CLIPDensePredT):
 
-    def __init__(self, version='ViT-B/32', extract_layers=(3, 6, 9), cond_layer=0, reduce_dim=128, n_heads=4, 
+    def __init__(self, version='openai/clip-vit-base-patch32', extract_layers=(3, 6, 9), cond_layer=0, reduce_dim=128, n_heads=4, 
                  prompt='fixed', extra_blocks=0, reduce_cond=None, fix_shift=False, learn_trans_conv_only=False, 
                  refine=None, limit_to_clip_only=False, upsample=False, add_calibration=False, n_tokens=None):
 
@@ -451,7 +451,7 @@ class CLIPDensePredTMasked(CLIPDensePredT):
 
 class CLIPDenseBaseline(CLIPDenseBase):
 
-    def __init__(self, version='ViT-B/32', cond_layer=0, 
+    def __init__(self, version='openai/clip-vit-base-patch32', cond_layer=0, 
                 extract_layer=9, reduce_dim=128, reduce2_dim=None, prompt='fixed', 
                  reduce_cond=None, limit_to_clip_only=False, n_tokens=None):
         
@@ -463,7 +463,7 @@ class CLIPDenseBaseline(CLIPDenseBase):
         self.limit_to_clip_only = limit_to_clip_only
         self.shift_vector = None
 
-        self.token_shape = {'ViT-B/32': (7, 7), 'ViT-B/16': (14, 14)}[version]
+        self.token_shape = {'openai/clip-vit-base-patch32': (7, 7), 'openai/clip-vit-base-patch16': (14, 14)}[version]
         
         assert reduce2_dim is not None
 
@@ -473,7 +473,7 @@ class CLIPDenseBaseline(CLIPDenseBase):
             nn.Linear(reduce2_dim, reduce_dim)
         )
         
-        trans_conv_ks = {'ViT-B/32': (32, 32), 'ViT-B/16': (16, 16)}[version]
+        trans_conv_ks = {'openai/clip-vit-base-patch32': (32, 32), 'openai/clip-vit-base-patch16': (16, 16)}[version]
         self.trans_conv = nn.ConvTranspose2d(reduce_dim, 1, trans_conv_ks, stride=trans_conv_ks)
 
 
