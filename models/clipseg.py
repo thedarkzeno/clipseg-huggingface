@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as nnf
 from torch.nn.modules.activation import ReLU
-
+from transformers import VisionTextDualEncoderProcessor, AutoModel
 
 def get_prompt_list(prompt):
     if prompt == 'plain':
@@ -80,11 +80,13 @@ class CLIPDenseBase(nn.Module):
     def __init__(self, version, reduce_cond, reduce_dim, prompt, n_tokens):
         super().__init__()
 
-        import clip
+        # import clip
 
         # prec = torch.FloatTensor
-        self.clip_model, _ = clip.load(version, device='cpu', jit=False)
-        self.model = self.clip_model.visual
+        # self.clip_model, _ = clip.load(version, device='cpu', jit=False)
+        self.clip_processor = VisionTextDualEncoderProcessor.from_pretrained(version)
+        self.clip_model = AutoModel.from_pretrained(version).to("cpu")
+        self.model = self.clip_model.vision_model
 
         # if not None, scale conv weights such that we obtain n_tokens.
         self.n_tokens = n_tokens
@@ -114,13 +116,23 @@ class CLIPDenseBase(nn.Module):
             self.precomputed_prompts = {k: torch.from_numpy(v) for k, v in precomp.items()}        
         else:
             self.precomputed_prompts = dict()
-    
+    def get_text_embed(self, text):
+        inputs = self.clip_processor(text=text, return_tensors="pt", padding=True)#.to(device)
+        
+        # embed = clip_model.text_projection(clip_model.text_model(inputs.input_ids)[1])
+        with torch.no_grad():
+            embed = self.clip_model.get_text_features(inputs.input_ids)
+        return embed
+    def get_image_inputs(self, img):
+        inputs = self.clip_processor(images=img, return_tensors="pt", padding=True)#.to(device)
+        return inputs    
+
     def rescaled_pos_emb(self, new_size):
         assert len(new_size) == 2
 
-        a = self.model.positional_embedding[1:].T.view(1, 768, *self.token_shape)
+        a = self.model.embeddings.position_embedding[1:].T.view(1, 768, *self.token_shape)
         b = nnf.interpolate(a, new_size, mode='bicubic', align_corners=False).squeeze(0).view(768, new_size[0]*new_size[1]).T
-        return torch.cat([self.model.positional_embedding[:1], b])
+        return torch.cat([self.model.embeddings.position_embedding[:1], b])
 
     def visual_forward(self, x_inp, extract_layers=(), skip=False, mask=None):
         
@@ -131,30 +143,30 @@ class CLIPDenseBase(nn.Module):
 
             if self.n_tokens is not None:
                 stride2 = x_inp.shape[2] // self.n_tokens
-                conv_weight2 = nnf.interpolate(self.model.conv1.weight, (stride2, stride2), mode='bilinear', align_corners=True)
-                x = nnf.conv2d(x_inp, conv_weight2, bias=self.model.conv1.bias, stride=stride2, dilation=self.model.conv1.dilation)
+                conv_weight2 = nnf.interpolate(self.model.embeddings.patch_embedding.weight, (stride2, stride2), mode='bilinear', align_corners=True)
+                x = nnf.conv2d(x_inp, conv_weight2, bias=self.model.embeddings.patch_embedding.bias, stride=stride2, dilation=self.model.embeddings.patch_embedding.dilation)
             else:
-                x = self.model.conv1(x_inp)  # shape = [*, width, grid, grid]
+                x = self.model.embeddings.patch_embedding(x_inp)  # shape = [*, width, grid, grid]
 
             x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
             x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
 
-            x = torch.cat([self.model.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+            x = torch.cat([self.model.embeddings.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
 
-            standard_n_tokens = 50 if self.model.conv1.kernel_size[0] == 32 else 197
+            standard_n_tokens = 50 if self.model.embeddings.patch_embedding.kernel_size[0] == 32 else 197
 
             if x.shape[1] != standard_n_tokens:
                 new_shape = int(math.sqrt(x.shape[1]-1))
                 x = x + self.rescaled_pos_emb((new_shape, new_shape)).to(x.dtype)[None,:,:]
             else:
-                x = x + self.model.positional_embedding.to(x.dtype)
+                x = x + self.model.embeddings.position_embedding.to(x.dtype)
 
-            x = self.model.ln_pre(x)
+            x = self.model.pre_layrnorm(x)
 
             x = x.permute(1, 0, 2)  # NLD -> LND
 
             activations, affinities = [], []
-            for i, res_block in enumerate(self.model.transformer.resblocks):
+            for i, res_block in enumerate(self.model.encoder.layers):
                 
                 if mask is not None:
                     mask_layer, mask_type, mask_tensor = mask
@@ -184,10 +196,10 @@ class CLIPDenseBase(nn.Module):
                     break
                 
             x = x.permute(1, 0, 2)  # LND -> NLD
-            x = self.model.ln_post(x[:, 0, :])
+            x = self.model.post_layernorm(x[:, 0, :])
 
-            if self.model.proj is not None:
-                x = x @ self.model.proj
+            if self.clip_model.visual_projection is not None:
+                x = x @ self.clip_model.visual_projection
 
             return x, activations, affinities
 
@@ -223,19 +235,20 @@ class CLIPDenseBase(nn.Module):
         return cond   
 
     def compute_conditional(self, conditional):
-        import clip
+        # import clip
 
         dev = next(self.parameters()).device
 
-        if type(conditional) in {list, tuple}:
-            text_tokens = clip.tokenize(conditional).to(dev)
-            cond = self.clip_model.encode_text(text_tokens)
+        if type(conditional) in {list}:
+            # text_tokens = clip.tokenize(conditional).to(dev)
+            cond = self.get_text_embed(conditional).reshape(1, -1).float()#self.clip_model.encode_text(text_tokens)
         else:
             if conditional in self.precomputed_prompts:
                 cond = self.precomputed_prompts[conditional].float().to(dev)
             else:
-                text_tokens = clip.tokenize([conditional]).to(dev)
-                cond = self.clip_model.encode_text(text_tokens)[0]
+                # text_tokens = clip.tokenize([conditional]).to(dev)
+                # cond = self.clip_model.encode_text(text_tokens)[0]
+                cond = self.get_text_embed([conditional]).reshape(1, -1).float()#[0]
         
         if self.shift_vector is not None:
             return cond + self.shift_vector
@@ -243,27 +256,27 @@ class CLIPDenseBase(nn.Module):
             return cond
 
 
-def clip_load_untrained(version):
-    assert version == 'ViT-B/16'
-    from clip.model import CLIP
-    from clip.clip import _MODELS, _download
-    model = torch.jit.load(_download(_MODELS['ViT-B/16'])).eval()
-    state_dict = model.state_dict()
+# def clip_load_untrained(version):
+#     assert version == 'ViT-B/16'
+#     from clip.model import CLIP
+#     from clip.clip import _MODELS, _download
+#     model = torch.jit.load(_download(_MODELS['ViT-B/16'])).eval()
+#     state_dict = model.state_dict()
 
-    vision_width = state_dict["visual.conv1.weight"].shape[0]
-    vision_layers = len([k for k in state_dict.keys() if k.startswith("visual.") and k.endswith(".attn.in_proj_weight")])
-    vision_patch_size = state_dict["visual.conv1.weight"].shape[-1]
-    grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
-    image_resolution = vision_patch_size * grid_size
-    embed_dim = state_dict["text_projection"].shape[1]
-    context_length = state_dict["positional_embedding"].shape[0]
-    vocab_size = state_dict["token_embedding.weight"].shape[0]
-    transformer_width = state_dict["ln_final.weight"].shape[0]
-    transformer_heads = transformer_width // 64
-    transformer_layers = len(set(k.split(".")[2] for k in state_dict if k.startswith(f"transformer.resblocks")))
+#     vision_width = state_dict["visual.conv1.weight"].shape[0]
+#     vision_layers = len([k for k in state_dict.keys() if k.startswith("visual.") and k.endswith(".attn.in_proj_weight")])
+#     vision_patch_size = state_dict["visual.conv1.weight"].shape[-1]
+#     grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
+#     image_resolution = vision_patch_size * grid_size
+#     embed_dim = state_dict["text_projection"].shape[1]
+#     context_length = state_dict["positional_embedding"].shape[0]
+#     vocab_size = state_dict["token_embedding.weight"].shape[0]
+#     transformer_width = state_dict["ln_final.weight"].shape[0]
+#     transformer_heads = transformer_width // 64
+#     transformer_layers = len(set(k.split(".")[2] for k in state_dict if k.startswith(f"encoder.layers")))
 
-    return CLIP(embed_dim, image_resolution, vision_layers, vision_width, vision_patch_size, 
-        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers)    
+#     return CLIP(embed_dim, image_resolution, vision_layers, vision_width, vision_patch_size, 
+#         context_length, vocab_size, transformer_width, transformer_heads, transformer_layers)    
 
 
 class CLIPDensePredT(CLIPDenseBase):
@@ -347,7 +360,7 @@ class CLIPDensePredT(CLIPDenseBase):
 
         assert type(return_features) == bool
 
-        inp_image = inp_image.to(self.model.positional_embedding.device)
+        inp_image = inp_image.to(self.model.embeddings.position_embedding.device)
 
         if mask is not None:
             raise ValueError('mask not supported')
@@ -466,7 +479,7 @@ class CLIPDenseBaseline(CLIPDenseBase):
 
     def forward(self, inp_image, conditional=None, return_features=False):
 
-        inp_image = inp_image.to(self.model.positional_embedding.device)
+        inp_image = inp_image.to(self.model.embeddings.position_embedding.device)
 
         # x_inp = normalize(inp_image)
         x_inp = inp_image
