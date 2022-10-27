@@ -29,7 +29,7 @@ def forward_multihead_attention(x, b, with_aff=False, attn_mask=None):
     b: multihead attention module. 
     """
 
-    x_ = b.ln_1(x)
+    x_ = b.layer_norm1(x)
     q, k, v = nnf.linear(x_, b.attn.in_proj_weight, b.attn.in_proj_bias).chunk(3, dim=-1)
     tgt_len, bsz, embed_dim = q.size()
 
@@ -67,7 +67,7 @@ def forward_multihead_attention(x, b, with_aff=False, attn_mask=None):
     attn_output = b.attn.out_proj(attn_output)
 
     x = x + attn_output
-    x = x + b.mlp(b.ln_2(x))
+    x = x + b.mlp(b.layer_norm2(x))
 
     if with_aff:
         return x, attn_output_weights
