@@ -28,17 +28,18 @@ def forward_multihead_attention(x, b, with_aff=False, attn_mask=None):
     x: input.
     b: multihead attention module. 
     """
-
+    in_proj_weight = torch.cat([b.self_attn.q_proj.weight.data, b.self_attn.k_proj.weight.data, b.self_attn.v_proj.weight.data], dim=0) #= b..in_proj_weight.chunk(3, dim=0)
+    in_proj_bias = torch.cat([b.self_attn.q_proj.bias.data, b.self_attn.k_proj.bias.data, b.self_attn.v_proj.bias.data], dim=0)
     x_ = b.layer_norm1(x)
-    q, k, v = nnf.linear(x_, b.attn.in_proj_weight, b.attn.in_proj_bias).chunk(3, dim=-1)
+    q, k, v = nnf.linear(x_, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
     tgt_len, bsz, embed_dim = q.size()
 
-    head_dim = embed_dim // b.attn.num_heads
+    head_dim = embed_dim // b.self_attn.num_heads
     scaling = float(head_dim) ** -0.5
 
-    q = q.contiguous().view(tgt_len, bsz * b.attn.num_heads, b.attn.head_dim).transpose(0, 1)
-    k = k.contiguous().view(-1, bsz * b.attn.num_heads, b.attn.head_dim).transpose(0, 1)
-    v = v.contiguous().view(-1, bsz * b.attn.num_heads, b.attn.head_dim).transpose(0, 1)
+    q = q.contiguous().view(tgt_len, bsz * b.self_attn.num_heads, b.self_attn.head_dim).transpose(0, 1)
+    k = k.contiguous().view(-1, bsz * b.self_attn.num_heads, b.self_attn.head_dim).transpose(0, 1)
+    v = v.contiguous().view(-1, bsz * b.self_attn.num_heads, b.self_attn.head_dim).transpose(0, 1)
 
     q = q * scaling
 
@@ -64,7 +65,7 @@ def forward_multihead_attention(x, b, with_aff=False, attn_mask=None):
 
     attn_output = torch.bmm(attn_output_weights, v)
     attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
-    attn_output = b.attn.out_proj(attn_output)
+    attn_output = b.self_attn.out_proj(attn_output)
 
     x = x + attn_output
     x = x + b.mlp(b.layer_norm2(x))
@@ -264,7 +265,7 @@ class CLIPDenseBase(nn.Module):
 #     state_dict = model.state_dict()
 
 #     vision_width = state_dict["visual.conv1.weight"].shape[0]
-#     vision_layers = len([k for k in state_dict.keys() if k.startswith("visual.") and k.endswith(".attn.in_proj_weight")])
+#     vision_layers = len([k for k in state_dict.keys() if k.startswith("visual.") and k.endswith(".self_attn.in_proj_weight")])
 #     vision_patch_size = state_dict["visual.conv1.weight"].shape[-1]
 #     grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
 #     image_resolution = vision_patch_size * grid_size
