@@ -361,7 +361,7 @@ class CLIPDensePredT(CLIPDenseBase):
 
         assert type(return_features) == bool
 
-        # inp_image = inp_image.to(self.model.device)
+        inp_image = inp_image.to(self.model.embeddings.position_embedding.weight.device)
 
         if mask is not None:
             raise ValueError('mask not supported')
@@ -480,7 +480,7 @@ class CLIPDenseBaseline(CLIPDenseBase):
 
     def forward(self, inp_image, conditional=None, return_features=False):
 
-        # inp_image = inp_image.to(self.model.device)
+        inp_image = inp_image.to(self.model.embeddings.position_embedding.weight.device)
 
         # x_inp = normalize(inp_image)
         x_inp = inp_image
