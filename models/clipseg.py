@@ -200,7 +200,7 @@ class CLIPDenseBase(nn.Module):
             x = self.model.post_layernorm(x[:, 0, :])
 
             if self.clip_model.visual_projection is not None:
-                x = x @ self.clip_model.visual_projection
+                x = x @ self.clip_model.visual_projection.weight.data
 
             return x, activations, affinities
 
